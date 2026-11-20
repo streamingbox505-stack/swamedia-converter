@@ -2,4 +2,3 @@ out/
 work/
 __pycache__/
 .env
-approved_items.json
