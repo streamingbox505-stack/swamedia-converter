@@ -54,6 +54,7 @@ jobs:
       - name: Run
         env:
           HF_REPO: ${{ vars.HF_REPO }}
+          HF_ALLOW_PUBLIC: ${{ vars.HF_ALLOW_PUBLIC }}
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
           ENABLE_CONVERSION: ${{ vars.ENABLE_CONVERSION }}
