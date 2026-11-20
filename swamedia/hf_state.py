@@ -1,6 +1,6 @@
 """Private Hugging Face dataset adapter. Refuses to write unless the repo is PRIVATE."""
 from __future__ import annotations
-import json, os, tempfile
+import json, os, sys, tempfile
 
 
 class PublicRepoError(RuntimeError):
@@ -20,6 +20,9 @@ class HFStore:
     def ensure_private(self):
         info = self.api.repo_info(self.repo, repo_type="dataset")
         if getattr(info, "private", False) is not True:
+            if os.environ.get("HF_ALLOW_PUBLIC", "").lower() == "true":  # owner's explicit opt-in
+                print("WARNING: HF dataset is PUBLIC (HF_ALLOW_PUBLIC=true); files are downloadable by anyone", file=sys.stderr)
+                return
             raise PublicRepoError(f"STOP: dataset {self.repo} is not private. Make it private yourself; this tool never changes visibility.")
 
     def load_json(self, path: str, default):
