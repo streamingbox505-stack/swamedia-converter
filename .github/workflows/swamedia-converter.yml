@@ -1,0 +1,84 @@
+name: swamedia-converter
+on:
+  workflow_dispatch:
+    inputs:
+      mode: {description: "discover | dry-run | convert", type: choice, default: discover, options: [discover, dry-run, convert, sync-d1]}
+      kind: {description: "movie / series / all", type: choice, default: all, options: [all, movie, series]}
+      only_item_id: {description: "SwaMedia item ID moja (hiari)", type: string, default: ""}
+      max_files: {description: "Idadi ya juu ya faili kwa run", type: string, default: "5"}
+      manual_retry: {description: "Rudia failed zinazostahili (si blocked-adult; adult haina bypass)", type: boolean, default: false}
+  # schedule: (iwashe tu baada ya review) - convert bado inahitaji vars.ENABLE_CONVERSION == 'true'
+permissions:
+  contents: read
+concurrency:
+  group: swamedia-converter-${{ vars.HF_REPO || 'unset' }}
+  cancel-in-progress: false
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest -q tests
+  run:
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: pip install -r requirements.txt
+      - name: Validate secrets early (values never printed)
+        if: inputs.mode != 'discover'
+        env:
+          HF_REPO: ${{ vars.HF_REPO }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          IN_MODE: ${{ inputs.mode }}
+        run: |
+          need() { for v in "$@"; do [ -n "${!v}" ] || { echo "::error::missing $v"; exit 1; }; done; }
+          case "$IN_MODE" in
+            sync-d1)  need HF_REPO HF_TOKEN CF_ACCOUNT_ID D1_DATABASE_ID CF_API_TOKEN ;;
+            dry-run)  need GDRIVE_SERVICE_ACCOUNT_JSON ;;
+            convert)  need GDRIVE_SERVICE_ACCOUNT_JSON HF_REPO HF_TOKEN ;;
+          esac
+      - name: Run
+        env:
+          HF_REPO: ${{ vars.HF_REPO }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          ENABLE_CONVERSION: ${{ vars.ENABLE_CONVERSION }}
+          CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          IN_MODE: ${{ inputs.mode }}
+          IN_KIND: ${{ inputs.kind }}
+          IN_MAX: ${{ inputs.max_files }}
+          IN_ITEM: ${{ inputs.only_item_id }}
+          IN_RETRY: ${{ inputs.manual_retry }}
+        run: |
+          args=(--mode "$IN_MODE" --kind "$IN_KIND" --max-files "$IN_MAX" --budget-minutes 310)
+          [ -n "$IN_ITEM" ] && args+=(--only-item-id "$IN_ITEM")
+          [ "$IN_RETRY" = "true" ] && args+=(--manual-retry)
+          [ -f approved_items.json ] && args+=(--approvals approved_items.json)
+          python -m swamedia.cli "${args[@]}"
+      - name: Job summary
+        if: always()
+        run: '[ -f out/summary.md ] && cat out/summary.md >> "$GITHUB_STEP_SUMMARY" || true'
+      - name: "Sanitized artifact - counts and warnings only, no tokens or URLs"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swamedia-reports
+          path: out/*.json
+          if-no-files-found: ignore
+          retention-days: 14
