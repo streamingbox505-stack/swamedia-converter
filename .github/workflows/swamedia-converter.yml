@@ -7,7 +7,8 @@ on:
       only_item_id: {description: "SwaMedia item ID moja (hiari)", type: string, default: ""}
       max_files: {description: "Idadi ya juu ya faili kwa run", type: string, default: "5"}
       manual_retry: {description: "Rudia failed zinazostahili (si blocked-adult; adult haina bypass)", type: boolean, default: false}
-  # schedule: (iwashe tu baada ya review) - convert bado inahitaji vars.ENABLE_CONVERSION == 'true'
+  schedule:
+    - cron: "0 22 * * *"   # kila siku 22:00 UTC (01:00 EAT). Convert inafanya kazi tu ikiwa vars.ENABLE_CONVERSION == 'true'
 permissions:
   contents: read
 concurrency:
@@ -43,7 +44,7 @@ jobs:
           CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          IN_MODE: ${{ inputs.mode }}
+          IN_MODE: ${{ inputs.mode || 'convert' }}
         run: |
           need() { for v in "$@"; do [ -n "${!v}" ] || { echo "::error::missing $v"; exit 1; }; done; }
           case "$IN_MODE" in
@@ -61,16 +62,17 @@ jobs:
           CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
           D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          IN_MODE: ${{ inputs.mode }}
-          IN_KIND: ${{ inputs.kind }}
-          IN_MAX: ${{ inputs.max_files }}
+          IN_MODE: ${{ inputs.mode || 'convert' }}
+          IN_KIND: ${{ inputs.kind || 'all' }}
+          IN_MAX: ${{ inputs.max_files || vars.SCHEDULED_MAX_FILES || '20' }}
+          AUTO_APPROVE: ${{ vars.AUTO_APPROVE }}
           IN_ITEM: ${{ inputs.only_item_id }}
           IN_RETRY: ${{ inputs.manual_retry }}
         run: |
           args=(--mode "$IN_MODE" --kind "$IN_KIND" --max-files "$IN_MAX" --budget-minutes 310)
           [ -n "$IN_ITEM" ] && args+=(--only-item-id "$IN_ITEM")
           [ "$IN_RETRY" = "true" ] && args+=(--manual-retry)
-          [ -f approved_items.json ] && args+=(--approvals approved_items.json)
+          if [ "$AUTO_APPROVE" = "true" ]; then args+=(--auto-approve); elif [ -f approved_items.json ]; then args+=(--approvals approved_items.json); fi
           python -m swamedia.cli "${args[@]}"
       - name: Job summary
         if: always()
