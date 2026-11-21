@@ -266,6 +266,19 @@ class D1Tests(unittest.TestCase):
             def run(self, sql): calls.append(sql)
         d1.sync(C(), ["SELECT 1;"] * 250, chunk=100)
         self.assertEqual(len(calls), 4)
+    def test_bad_row_isolated(self):
+        from swamedia import d1
+        done = []
+        class C:
+            def run(self, sql):
+                if "BAD" in sql: raise d1.D1Error(400, "SQLITE_ERROR: x")
+                done.append(sql)
+        stmts = ["INSERT OR REPLACE INTO items (id,title) VALUES ('1','ok');", "INSERT OR REPLACE INTO items (id,title) VALUES ('2','BAD');",
+                 "INSERT OR REPLACE INTO media (media_id,item_id) VALUES ('m9','3');"]
+        fl = []
+        d1.sync(C(), stmts, chunk=100, failures=fl)
+        self.assertEqual(len(fl), 1); self.assertEqual(fl[0][0], "items:2")
+        self.assertEqual(len([d for d in done if d.startswith("INSERT")]), 2)
 
 
 if __name__ == "__main__":
