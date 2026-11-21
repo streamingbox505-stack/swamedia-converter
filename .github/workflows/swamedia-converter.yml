@@ -74,9 +74,26 @@ jobs:
           [ "$IN_RETRY" = "true" ] && args+=(--manual-retry)
           if [ "$AUTO_APPROVE" = "true" ]; then args+=(--auto-approve); elif [ -f approved_items.json ]; then args+=(--approvals approved_items.json); fi
           python -m swamedia.cli "${args[@]}"
+      - name: Sync D1 after convert (metadata + ready media links)
+        if: success() && (github.event_name == 'schedule' || inputs.mode == 'convert') && vars.ENABLE_CONVERSION == 'true'
+        env:
+          HF_REPO: ${{ vars.HF_REPO }}
+          HF_ALLOW_PUBLIC: ${{ vars.HF_ALLOW_PUBLIC }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          D1_DATABASE_ID: ${{ vars.D1_DATABASE_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          AUTO_APPROVE: ${{ vars.AUTO_APPROVE }}
+        run: |
+          for v in HF_REPO HF_TOKEN CF_ACCOUNT_ID D1_DATABASE_ID CF_API_TOKEN; do
+            [ -n "${!v}" ] || { echo "::warning::D1 sync skipped, missing $v"; exit 0; }
+          done
+          args=(--mode sync-d1 --out out_sync)
+          if [ "$AUTO_APPROVE" = "true" ]; then args+=(--auto-approve); elif [ -f approved_items.json ]; then args+=(--approvals approved_items.json); fi
+          python -m swamedia.cli "${args[@]}"
       - name: Job summary
         if: always()
-        run: '[ -f out/summary.md ] && cat out/summary.md >> "$GITHUB_STEP_SUMMARY" || true'
+        run: 'for f in out/summary.md out_sync/summary.md; do [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"; done; true'
       - name: "Sanitized artifact - counts and warnings only, no tokens or URLs"
         if: always()
         uses: actions/upload-artifact@v4
