@@ -28,6 +28,31 @@ def _drive_client():
     return DriveClient(token)
 
 
+def load_blocklist(path):
+    if not path or not os.path.exists(path):
+        return []
+    return [w.strip().lower() for w in open(path, encoding="utf-8") if w.strip() and not w.lstrip().startswith("#")]
+
+
+def auto_approvals(records, blocklist):
+    """Owner-enabled automatic approval. policy.classify exclusions still apply (exclusion beats approval);
+    blocklist words skip an item (it stays unapproved). Returns (approvals dict, skipped_count)."""
+    import re
+    pats = [re.compile(r"(?<!\w)" + re.escape(w) + r"(?!\w)", re.I) for w in blocklist]
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    items, skipped = [], 0
+    for rid, rec in records.items():
+        if policy.classify(rec).status != "source_regular":
+            continue
+        text = f"{rec.get('title','')} {rec.get('dj','')}"
+        if any(p.search(text) for p in pats):
+            skipped += 1
+            continue
+        items.append({"id": rid, "source_version": policy.source_version(rec), "approved_by": "auto-rules", "approved_at": now})
+    return {"items": items}, skipped
+
+
 def _write(out, name, obj):
     with open(os.path.join(out, name), "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=1)
@@ -40,6 +65,8 @@ def main(argv=None):
     ap.add_argument("--only-item-id")
     ap.add_argument("--max-files", type=int, default=5)
     ap.add_argument("--approvals", help="local approved_items.json (else read from private HF dataset)")
+    ap.add_argument("--auto-approve", action="store_true", help="approve every source_regular item not matching --blocklist (policy exclusions still win)")
+    ap.add_argument("--blocklist", default="blocklist.txt")
     ap.add_argument("--manual-retry", action="store_true")
     ap.add_argument("--out", default="out")
     ap.add_argument("--workdir", default="work")
@@ -52,11 +79,15 @@ def main(argv=None):
     _write(a.out, "discovery_report.json", report)
     _write(a.out, "review_manifest.json", pipeline.review_manifest(records, decisions, conflicts))
     summary = [f"mode={a.mode}", f"records={report['distinct_records']}", f"status={report['status_counts']}"] + warnings
+    auto = None
+    if a.auto_approve:
+        auto, skipped = auto_approvals(records, load_blocklist(a.blocklist))
+        summary.append(f"auto-approve: approved={len(auto['items'])} blocklist_skipped={skipped}")
     if a.mode == "sync-d1":
         from . import d1
         from .hf_state import HFStore
         store = HFStore(os.environ.get("HF_REPO", ""), os.environ.get("HF_TOKEN", ""))  # enforces PRIVATE
-        approvals = json.load(open(a.approvals, encoding="utf-8")) if a.approvals else store.load_json("approved_items.json", {"items": []})
+        approvals = auto if auto is not None else (json.load(open(a.approvals, encoding="utf-8")) if a.approvals else store.load_json("approved_items.json", {"items": []}))
         approved, _ = policy.approved_ids(records, approvals)
         tasks = store.load_json(pipeline.STATE_PATH, {"tasks": {}})["tasks"]
         stmts = d1.build_statements(records, decisions, approved, tasks, store.repo)
@@ -64,7 +95,7 @@ def main(argv=None):
         n = d1.sync(d1.D1Client(os.environ["CF_ACCOUNT_ID"], os.environ["D1_DATABASE_ID"], os.environ["CF_API_TOKEN"]), stmts)
         summary.append(f"d1 statements={n} approved={len(approved)} media_rows={len(tasks)}")
     elif a.mode != "discover":
-        approvals = json.load(open(a.approvals, encoding="utf-8")) if a.approvals else None
+        approvals = auto if auto is not None else (json.load(open(a.approvals, encoding="utf-8")) if a.approvals else None)
         drive = _drive_client()
         if a.mode == "dry-run":
             if approvals is None:
