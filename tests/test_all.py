@@ -138,6 +138,17 @@ class FakeApi:
     def __init__(self, private=True): self.private, self.commits, self.fail = private, [], False
     def repo_info(self, repo, repo_type=None): return FakeInfo(self.private)
 
+class AutoApproveTests(unittest.TestCase):
+    def test_auto_approve_respects_policy_and_blocklist(self):
+        from swamedia import cli
+        recs = {"1": rec(id="1", title="Luca", type="movie"), "2": rec(id="2", title="Spicy Night Show", type="movie"),
+                "3": rec(id="3", title="Safe", type="movie", adult="1")}
+        ap, skipped = cli.auto_approvals(recs, ["spicy"])
+        ids = {i["id"] for i in ap["items"]}
+        self.assertEqual(ids, {"1"}); self.assertEqual(skipped, 1)
+        ok, problems = policy.approved_ids(recs, ap)
+        self.assertEqual(ok, {"1"}, problems)
+
 class StateTests(unittest.TestCase):
     def test_public_repo_blocks_writes(self):
         s = HFStore("u/r", "tok", api=FakeApi(private=False))
