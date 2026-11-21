@@ -105,8 +105,14 @@ def main(argv=None):
         tasks = store.load_json(pipeline.STATE_PATH, {"tasks": {}})["tasks"]
         stmts = d1.build_statements(records, decisions, approved, tasks, store.repo)
         d1.write_sql_file(stmts, os.path.join(a.workdir, "d1_sync.sql"))  # local only, contains links: NOT uploaded as artifact
-        n = d1.sync(d1.D1Client(os.environ["CF_ACCOUNT_ID"], os.environ["D1_DATABASE_ID"], os.environ["CF_API_TOKEN"]), stmts)
-        summary.append(f"d1 statements={n} approved={len(approved)} media_rows={len(tasks)}")
+        failures = []
+        n = d1.sync(d1.D1Client(os.environ["CF_ACCOUNT_ID"], os.environ["D1_DATABASE_ID"], os.environ["CF_API_TOKEN"]), stmts, failures=failures)
+        summary.append(f"d1 statements={n} approved={len(approved)} media_rows={len(tasks)} failed={len(failures)}")
+        summary += [f"d1 FAILED {lab}: {why}" for lab, why in failures[:50]]
+        if failures:
+            open(os.path.join(a.out, "summary.md"), "w").write("\n".join(f"- {x}" for x in summary) + "\n")
+            print("\n".join(summary))
+            sys.exit(1)
     elif a.mode != "discover":
         approvals = auto if auto is not None else (json.load(open(a.approvals, encoding="utf-8")) if a.approvals else None)
         drive = _drive_client()
