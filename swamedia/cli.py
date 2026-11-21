@@ -1,6 +1,6 @@
 """CLI: python -m swamedia.cli --mode discover|dry-run|convert"""
 from __future__ import annotations
-import argparse, json, os, sys
+import argparse, base64, json, os, sys
 from collections import Counter
 
 from . import pipeline, policy
@@ -11,6 +11,19 @@ def _fetch_page(kind, page):
     return fetch_json(api_url(kind, page))
 
 
+def load_service_account(raw):
+    """Accepts the key as plain JSON or as base64 of that JSON. Never prints the value."""
+    raw = raw.strip()
+    for attempt in (lambda: json.loads(raw), lambda: json.loads(base64.b64decode(raw, validate=False).decode("utf-8"))):
+        try:
+            info = attempt()
+            if isinstance(info, dict) and info.get("private_key") and info.get("client_email"):
+                return info
+        except Exception:
+            pass
+    sys.exit("BLOCKED: GDRIVE_SERVICE_ACCOUNT_JSON is not valid service-account JSON (plain or base64). Value not shown.")
+
+
 def _drive_client():
     raw = os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON")
     if not raw:
@@ -18,7 +31,7 @@ def _drive_client():
     from google.oauth2 import service_account
     from google.auth.transport.requests import Request
     creds = service_account.Credentials.from_service_account_info(
-        json.loads(raw), scopes=["https://www.googleapis.com/auth/drive.readonly"])
+        load_service_account(raw), scopes=["https://www.googleapis.com/auth/drive.readonly"])
 
     def token():
         if not creds.valid:
