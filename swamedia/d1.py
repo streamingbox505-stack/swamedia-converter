@@ -66,6 +66,12 @@ def build_statements(records, decisions, approved, tasks, hf_repo):
     return out
 
 
+class D1Error(RuntimeError):
+    def __init__(self, status, detail=""):
+        super().__init__(f"D1 error HTTP {status}" + (f": {detail}" if detail else ""))
+        self.status, self.detail = status, detail
+
+
 class D1Client:
     def __init__(self, account_id, database_id, api_token, session=None):
         import requests
@@ -74,15 +80,43 @@ class D1Client:
 
     def run(self, sql: str):
         r = self.s.post(self.url, headers=self.h, json={"sql": sql}, timeout=120)
-        if r.status_code >= 400 or not r.json().get("success", False):
-            raise RuntimeError(f"D1 error HTTP {r.status_code}")  # body not echoed (may contain data)
-        return r.json()
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        if r.status_code >= 400 or not body.get("success", False):
+            errs = body.get("errors") or []
+            detail = "; ".join(f"{e.get('code')}: {str(e.get('message'))[:160]}" for e in errs[:2])
+            raise D1Error(r.status_code, detail)  # code + short message only
+        return body
 
 
-def sync(client, statements, chunk=100, schema_path=SCHEMA):
+_TARGET = re.compile(r"^(?:INSERT OR REPLACE INTO (\w+) \([^)]*\) VALUES \('?([^',)]*)|(UPDATE|DELETE)\b.*?item_id='?([^';]*))")
+
+
+def _label(stmt):
+    m = _TARGET.match(stmt)
+    if not m:
+        return "?"
+    return f"{m.group(1)}:{m.group(2)}" if m.group(1) else f"{m.group(3).lower()}:{m.group(4)}"
+
+
+def sync(client, statements, chunk=100, schema_path=SCHEMA, failures=None):
+    """Apply statements in chunks. If a chunk fails, retry its statements one by one so a single bad row
+    cannot block the rest; failed rows are appended to `failures` as (label, detail)."""
     client.run(re.sub(r"--.*", "", open(schema_path, encoding="utf-8").read()))
     for i in range(0, len(statements), chunk):
-        client.run("\n".join(statements[i:i + chunk]))
+        part = statements[i:i + chunk]
+        try:
+            client.run("\n".join(part))
+        except D1Error:
+            for stmt in part:
+                try:
+                    client.run(stmt)
+                except D1Error as e:
+                    if failures is None:
+                        raise
+                    failures.append((_label(stmt), e.detail or f"HTTP {e.status}"))
     return len(statements)
 
 
